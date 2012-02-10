@@ -51,6 +51,7 @@
 #include <trace/events/ext4.h>
 
 struct proc_dir_entry *ext4_proc_root;
+int ventana_ext4_invalid = 0;
 static struct kset *ext4_kset;
 
 static int ext4_load_journal(struct super_block *, struct ext4_super_block *,
@@ -2625,7 +2626,14 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->s_es = es;
 	sb->s_magic = le16_to_cpu(es->s_magic);
 	if (sb->s_magic != EXT4_SUPER_MAGIC)
+	{
+		ext4_msg(sb, KERN_ERR, "VFS: sb->s_magic %x", sb->s_magic);
+                if(sb->s_magic == 0xffff || sb->s_magic == 0){
+			ext4_msg(sb, KERN_ERR, "magic is 0xffff");
+			ventana_ext4_invalid = 1;
+		}
 		goto cantfind_ext4;
+	}
 	sbi->s_kbytes_written = le64_to_cpu(es->s_kbytes_written);
 
 	/* Set defaults before we parse the mount options */
@@ -2786,11 +2794,16 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->s_blocks_per_group = le32_to_cpu(es->s_blocks_per_group);
 	sbi->s_inodes_per_group = le32_to_cpu(es->s_inodes_per_group);
 	if (EXT4_INODE_SIZE(sb) == 0 || EXT4_INODES_PER_GROUP(sb) == 0)
+	{
+		ext4_msg(sb, KERN_ERR, "VFS: EXT4_INODE_SIZE(sb) %d, EXT4_INODES_PER_GROUP(sb) %ul", EXT4_INODE_SIZE(sb), EXT4_INODES_PER_GROUP(sb));
 		goto cantfind_ext4;
-
+	}
 	sbi->s_inodes_per_block = blocksize / EXT4_INODE_SIZE(sb);
 	if (sbi->s_inodes_per_block == 0)
+	{
+		ext4_msg(sb, KERN_ERR, "VFS: sbi->s_inodes_per_block %ul", sbi->s_inodes_per_block);
 		goto cantfind_ext4;
+	}
 	sbi->s_itb_per_group = sbi->s_inodes_per_group /
 					sbi->s_inodes_per_block;
 	sbi->s_desc_per_block = blocksize / EXT4_DESC_SIZE(sb);
@@ -2845,8 +2858,10 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 	}
 
 	if (EXT4_BLOCKS_PER_GROUP(sb) == 0)
+	{
+		ext4_msg(sb, KERN_ERR, "VFS: EXT4_BLOCKS_PER_GROUP(sb) %ul", EXT4_BLOCKS_PER_GROUP(sb));
 		goto cantfind_ext4;
-
+	}
 	/* check blocks count against device size */
 	blocks_count = sb->s_bdev->bd_inode->i_size >> sb->s_blocksize_bits;
 	if (blocks_count && ext4_blocks_count(es) > blocks_count) {
@@ -2924,6 +2939,24 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 	sbi->s_gdb_count = db_count;
 	get_random_bytes(&sbi->s_next_generation, sizeof(u32));
 	spin_lock_init(&sbi->s_next_gen_lock);
+
+	err = percpu_counter_init(&sbi->s_freeblocks_counter,
+			ext4_count_free_blocks(sb));
+	if (!err) {
+		err = percpu_counter_init(&sbi->s_freeinodes_counter,
+				ext4_count_free_inodes(sb));
+	}
+	if (!err) {
+		err = percpu_counter_init(&sbi->s_dirs_counter,
+				ext4_count_dirs(sb));
+	}
+	if (!err) {
+		err = percpu_counter_init(&sbi->s_dirtyblocks_counter, 0);
+	}
+	if (err) {
+		ext4_msg(sb, KERN_ERR, "insufficient memory");
+		goto failed_mount3;
+	}
 
 	sbi->s_stripe = ext4_get_stripe_size(sbi);
 	sbi->s_max_writeback_mb_bump = 128;
@@ -3023,22 +3056,19 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 	}
 	set_task_ioprio(sbi->s_journal->j_task, journal_ioprio);
 
-no_journal:
-	err = percpu_counter_init(&sbi->s_freeblocks_counter,
-				  ext4_count_free_blocks(sb));
-	if (!err)
-		err = percpu_counter_init(&sbi->s_freeinodes_counter,
-					  ext4_count_free_inodes(sb));
-	if (!err)
-		err = percpu_counter_init(&sbi->s_dirs_counter,
-					  ext4_count_dirs(sb));
-	if (!err)
-		err = percpu_counter_init(&sbi->s_dirtyblocks_counter, 0);
-	if (err) {
-		ext4_msg(sb, KERN_ERR, "insufficient memory");
-		goto failed_mount_wq;
-	}
+	/*
+	 * The journal may have updated the bg summary counts, so we
+	 * need to update the global counters.
+	 */
+	percpu_counter_set(&sbi->s_freeblocks_counter,
+			   ext4_count_free_blocks(sb));
+	percpu_counter_set(&sbi->s_freeinodes_counter,
+			   ext4_count_free_inodes(sb));
+	percpu_counter_set(&sbi->s_dirs_counter,
+			   ext4_count_dirs(sb));
+	percpu_counter_set(&sbi->s_dirtyblocks_counter, 0);
 
+no_journal:
 	EXT4_SB(sb)->dio_unwritten_wq = create_workqueue("ext4-dio-unwritten");
 	if (!EXT4_SB(sb)->dio_unwritten_wq) {
 		printk(KERN_ERR "EXT4-fs: failed to create DIO workqueue\n");
@@ -3185,10 +3215,6 @@ failed_mount_wq:
 		jbd2_journal_destroy(sbi->s_journal);
 		sbi->s_journal = NULL;
 	}
-	percpu_counter_destroy(&sbi->s_freeblocks_counter);
-	percpu_counter_destroy(&sbi->s_freeinodes_counter);
-	percpu_counter_destroy(&sbi->s_dirs_counter);
-	percpu_counter_destroy(&sbi->s_dirtyblocks_counter);
 failed_mount3:
 	if (sbi->s_flex_groups) {
 		if (is_vmalloc_addr(sbi->s_flex_groups))
@@ -3196,6 +3222,10 @@ failed_mount3:
 		else
 			kfree(sbi->s_flex_groups);
 	}
+	percpu_counter_destroy(&sbi->s_freeblocks_counter);
+	percpu_counter_destroy(&sbi->s_freeinodes_counter);
+	percpu_counter_destroy(&sbi->s_dirs_counter);
+	percpu_counter_destroy(&sbi->s_dirtyblocks_counter);
 failed_mount2:
 	for (i = 0; i < db_count; i++)
 		brelse(sbi->s_group_desc[i]);
@@ -3525,9 +3555,10 @@ static int ext4_commit_super(struct super_block *sb, int sync)
 		es->s_kbytes_written =
 			cpu_to_le64(EXT4_SB(sb)->s_kbytes_written);
 	ext4_free_blocks_count_set(es, percpu_counter_sum_positive(
-					&EXT4_SB(sb)->s_freeblocks_counter));
-	es->s_free_inodes_count = cpu_to_le32(percpu_counter_sum_positive(
-					&EXT4_SB(sb)->s_freeinodes_counter));
+					   &EXT4_SB(sb)->s_freeblocks_counter));
+	es->s_free_inodes_count =
+		cpu_to_le32(percpu_counter_sum_positive(
+				&EXT4_SB(sb)->s_freeinodes_counter));
 	sb->s_dirt = 0;
 	BUFFER_TRACE(sbh, "marking dirty");
 	mark_buffer_dirty(sbh);

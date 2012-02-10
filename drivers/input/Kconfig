@@ -161,6 +161,15 @@ config INPUT_APMPOWER
 	  To compile this driver as a module, choose M here: the
 	  module will be called apm-power.
 
+config INPUT_KEYRESET
+	tristate "Reset key"
+	depends on INPUT
+	---help---
+	  Say Y here if you want to reboot when some keys are pressed;
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called keyreset.
+
 config XEN_KBDDEV_FRONTEND
 	tristate "Xen virtual keyboard and mouse support"
 	depends on XEN_FBDEV_FRONTEND
@@ -170,6 +179,24 @@ config XEN_KBDDEV_FRONTEND
 	  This driver implements the front-end of the Xen virtual
 	  keyboard and mouse device driver.  It communicates with a back-end
 	  in another domain.
+config SENSORS_CAP_LDS6126
+	tristate "Capacitive Sensor Driver LDS6126"
+	depends on I2C
+	help
+	  This enables support for Cap sensor over I2C based sensors.	  	  
+config SENSORS_PROX_LDS6202
+	tristate "IDT Proximity Sensor Driver LDS6202"
+	depends on I2C
+	help
+	  This enables support for Proximity sensor over I2C based sensors.
+
+config ASUSEC
+        bool "ASUS embedded controller interface"
+        depends on I2C
+
+config DSP_FM34
+        tristate "DSP FM34 driver"
+        depends on I2C
 
 comment "Input Device Drivers"
 

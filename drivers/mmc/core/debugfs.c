@@ -218,11 +218,14 @@ static int mmc_ext_csd_open(struct inode *inode, struct file *filp)
 
 	filp->private_data = buf;
 	kfree(ext_csd);
+	ext_csd = NULL;
 	return 0;
 
 out_free:
 	kfree(buf);
+	buf = NULL;
 	kfree(ext_csd);
+	ext_csd = NULL;
 	return err;
 }
 
@@ -238,6 +241,7 @@ static ssize_t mmc_ext_csd_read(struct file *filp, char __user *ubuf,
 static int mmc_ext_csd_release(struct inode *inode, struct file *file)
 {
 	kfree(file->private_data);
+	file->private_data = NULL;
 	return 0;
 }
 

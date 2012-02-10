@@ -41,7 +41,7 @@
 #include <linux/notifier.h>
 
 #include <asm/uaccess.h>
-
+#include <asm/io.h>
 /*
  * for_each_console() allows you to iterate on each console
  */
@@ -56,6 +56,10 @@ void asmlinkage __attribute__((weak)) early_printk(const char *fmt, ...)
 }
 
 #define __LOG_BUF_LEN	(1 << CONFIG_LOG_BUF_SHIFT)
+
+#ifdef        CONFIG_DEBUG_LL
+extern void printascii(char *);
+#endif
 
 /* printk's without a loglevel use this.. */
 #define DEFAULT_MESSAGE_LOGLEVEL 4 /* KERN_WARNING */
@@ -137,6 +141,8 @@ static int selected_console = -1;
 static int preferred_console = -1;
 int console_set_on_cmdline;
 EXPORT_SYMBOL(console_set_on_cmdline);
+int console_none_on_cmdline = 0;
+EXPORT_SYMBOL(console_none_on_cmdline);
 
 /* Flag: console code may call schedule() */
 static int console_may_schedule;
@@ -148,6 +154,12 @@ static char *log_buf = __log_buf;
 static int log_buf_len = __LOG_BUF_LEN;
 static unsigned logged_chars; /* Number of chars produced since last read+clear operation */
 static int saved_console_loglevel = -1;
+char *auto_dump_log_buf_ptr = __log_buf;
+
+#define IRAM_KERNEL_LOG_BUFFER	0x40020000
+extern int suspend_process_going;
+static void __iomem *iram_log_addr=NULL;
+#define IRAM_LOG_BUF(idx) ( ((unsigned char*)iram_log_addr)[(idx) & LOG_BUF_MASK] )
 
 #ifdef CONFIG_KEXEC
 /*
@@ -261,6 +273,68 @@ static inline void boot_delay_msec(void)
 }
 #endif
 
+/*
+ * Return the number of unread characters in the log buffer.
+ */
+static int log_buf_get_len(void)
+{
+	return logged_chars;
+}
+
+/*
+ * Clears the ring-buffer
+ */
+void log_buf_clear(void)
+{
+	logged_chars = 0;
+}
+
+/*
+ * Copy a range of characters from the log buffer.
+ */
+int log_buf_copy(char *dest, int idx, int len)
+{
+	int ret, max;
+	bool took_lock = false;
+
+	if (!oops_in_progress) {
+		spin_lock_irq(&logbuf_lock);
+		took_lock = true;
+	}
+
+	max = log_buf_get_len();
+	if (idx < 0 || idx >= max) {
+		ret = -1;
+	} else {
+		if (len > max - idx)
+			len = max - idx;
+		ret = len;
+		idx += (log_end - max);
+		while (len-- > 0)
+			dest[len] = LOG_BUF(idx + len);
+	}
+
+	if (took_lock)
+		spin_unlock_irq(&logbuf_lock);
+
+	return ret;
+}
+
+/*
+ * Commands to do_syslog:
+ *
+ * 	0 -- Close the log.  Currently a NOP.
+ * 	1 -- Open the log. Currently a NOP.
+ * 	2 -- Read from the log.
+ * 	3 -- Read all messages remaining in the ring buffer.
+ * 	4 -- Read and clear all messages remaining in the ring buffer
+ * 	5 -- Clear ring buffer.
+ * 	6 -- Disable printk's to console
+ * 	7 -- Enable printk's to console
+ *	8 -- Set level of messages printed to console
+ *	9 -- Return number of unread characters in the log buffer
+ *     10 -- Return size of the log buffer
+ */
 int do_syslog(int type, char __user *buf, int len, bool from_file)
 {
 	unsigned i, j, limit, count;
@@ -529,6 +603,8 @@ static void call_console_drivers(unsigned start, unsigned end)
 static void emit_log_char(char c)
 {
 	LOG_BUF(log_end) = c;
+	if(suspend_process_going)
+	 IRAM_LOG_BUF(log_end) = c;
 	log_end++;
 	if (log_end - log_start > log_buf_len)
 		log_start = log_end - log_buf_len;
@@ -688,7 +764,7 @@ static inline void printk_delay(void)
 		}
 	}
 }
-
+extern int  suspend_process_going;
 asmlinkage int vprintk(const char *fmt, va_list args)
 {
 	int printed_len = 0;
@@ -736,6 +812,9 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	printed_len += vscnprintf(printk_buf + printed_len,
 				  sizeof(printk_buf) - printed_len, fmt, args);
 
+#ifdef	CONFIG_DEBUG_LL
+	printascii(printk_buf);
+#endif
 
 	p = printk_buf;
 
@@ -869,7 +948,7 @@ static int __init console_setup(char *str)
 	char buf[sizeof(console_cmdline[0].name) + 4]; /* 4 for index */
 	char *s, *options, *brl_options = NULL;
 	int idx;
-
+	iram_log_addr=ioremap(IRAM_KERNEL_LOG_BUFFER,8);
 #ifdef CONFIG_A11Y_BRAILLE_CONSOLE
 	if (!memcmp(str, "brl,", 4)) {
 		brl_options = "";
@@ -908,6 +987,9 @@ static int __init console_setup(char *str)
 			break;
 	idx = simple_strtoul(s, NULL, 10);
 	*s = 0;
+
+	if (!strcmp(buf, "none"))
+		console_none_on_cmdline = 1;
 
 	__add_preferred_console(buf, idx, options, brl_options);
 	console_set_on_cmdline = 1;

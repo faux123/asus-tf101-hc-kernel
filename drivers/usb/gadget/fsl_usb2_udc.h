@@ -4,6 +4,9 @@
 #ifndef __FSL_USB2_UDC_H
 #define __FSL_USB2_UDC_H
 
+//add by yi-hsin for AC and USB cable insert wake lock
+#include <linux/wakelock.h>
+
 /* ### define USB registers here
  */
 #define USB_MAX_CTRL_PAYLOAD		64
@@ -84,6 +87,15 @@ struct usb_dr_host {
 };
 
  /* non-EHCI USB system interface registers (Big Endian) */
+#ifdef CONFIG_ARCH_TEGRA
+struct usb_sys_interface {
+	u32 suspend_ctrl;
+	u32 vbus_sensors;
+	u32 vbus_wakeup;
+	u32 vbus_alt_status;
+	u32 legacy_ctrl;
+};
+#else
 struct usb_sys_interface {
 	u32 snoop1;
 	u32 snoop2;
@@ -93,6 +105,7 @@ struct usb_sys_interface {
 	u8 res[236];
 	u32 control;		/* General Purpose Control Register */
 };
+#endif
 
 /* ep0 transfer state */
 #define WAIT_FOR_SETUP          0
@@ -418,12 +431,25 @@ struct ep_td_struct {
                                                DTD_STATUS_DATA_BUFF_ERR | \
                                                DTD_STATUS_TRANSACTION_ERR)
 /* Alignment requirements; must be a power of two */
+#if defined(CONFIG_ARCH_TEGRA)
+#define DTD_ALIGNMENT				0x80
+#else
 #define DTD_ALIGNMENT				0x20
+#endif
 #define QH_ALIGNMENT				2048
+#define QH_OFFSET				0x1000
 
 /* Controller dma boundary */
 #define UDC_DMA_BOUNDARY			0x1000
 
+#define USB_SYS_VBUS_ASESSION_INT_EN		0x10000
+#define USB_SYS_VBUS_ASESSION_CHANGED		0x20000
+#define USB_SYS_VBUS_ASESSION			0x40000
+#define USB_SYS_VBUS_WAKEUP_ENABLE		0x40000000
+#define USB_SYS_VBUS_WAKEUP_INT_ENABLE		0x100
+#define USB_SYS_VBUS_WAKEUP_INT_STATUS		0x200
+#define USB_SYS_VBUS_STATUS			0x400
+#define USB_SYS_ID_PIN_STATUS       (0x4)
 /*-------------------------------------------------------------------------*/
 
 /* ### driver private data
@@ -489,6 +515,8 @@ struct fsl_udc {
 	u32 ep0_dir;		/* Endpoint zero direction: can be
 				   USB_DIR_IN or USB_DIR_OUT */
 	u8 device_address;	/* Device USB address */
+	//add by yi-hsin for AC and USB cable insert wake lock
+	struct wake_lock wake_lock;
 };
 
 /*-------------------------------------------------------------------------*/
@@ -564,10 +592,12 @@ static void dump_msg(const char *label, const u8 * buf, unsigned int length)
 #define get_pipe_by_ep(EP)	(ep_index(EP) * 2 + ep_is_in(EP))
 
 struct platform_device;
-#ifdef CONFIG_ARCH_MXC
+#if defined(CONFIG_ARCH_MXC) || defined(CONFIG_ARCH_TEGRA)
 int fsl_udc_clk_init(struct platform_device *pdev);
 void fsl_udc_clk_finalize(struct platform_device *pdev);
 void fsl_udc_clk_release(void);
+void fsl_udc_clk_suspend(bool is_dpd);
+void fsl_udc_clk_resume(bool is_dpd);
 #else
 static inline int fsl_udc_clk_init(struct platform_device *pdev)
 {
@@ -577,6 +607,12 @@ static inline void fsl_udc_clk_finalize(struct platform_device *pdev)
 {
 }
 static inline void fsl_udc_clk_release(void)
+{
+}
+static inline void fsl_udc_clk_suspend(bool is_dpd)
+{
+}
+static inline void fsl_udc_clk_resume(bool is_dpd)
 {
 }
 #endif

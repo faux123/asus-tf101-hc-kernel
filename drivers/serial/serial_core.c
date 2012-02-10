@@ -94,6 +94,9 @@ static void __uart_start(struct tty_struct *tty)
 	struct uart_state *state = tty->driver_data;
 	struct uart_port *port = state->uart_port;
 
+	if (port->ops->wake_peer)
+		port->ops->wake_peer(port);
+
 	if (!uart_circ_empty(&state->xmit) && state->xmit.buf &&
 	    !tty->stopped && !tty->hw_stopped)
 		port->ops->start_tx(port);
@@ -1490,10 +1493,8 @@ static void uart_update_termios(struct tty_struct *tty,
 {
 	struct uart_port *port = state->uart_port;
 
-	if (uart_console(port) && port->cons->cflag) {
+	if (uart_console(port) && port->cons->cflag)
 		tty->termios->c_cflag = port->cons->cflag;
-		port->cons->cflag = 0;
-	}
 
 	/*
 	 * If the device failed to grab its irq resources,
@@ -1984,10 +1985,8 @@ int uart_suspend_port(struct uart_driver *drv, struct uart_port *uport)
 	struct tty_struct *tty;
 
 	mutex_lock(&port->mutex);
-
 	/* Must be inside the mutex lock until we convert to tty_port */
 	tty = port->tty;
-
 	tty_dev = device_find_child(uport->dev, &match, serial_match_port);
 	if (device_may_wakeup(tty_dev)) {
 		enable_irq_wake(uport->irq);
@@ -2065,9 +2064,20 @@ int uart_resume_port(struct uart_driver *drv, struct uart_port *uport)
 	/*
 	 * Re-enable the console device after suspending.
 	 */
-	if (uart_console(uport)) {
+	if (console_suspend_enabled && uart_console(uport)) {
+		/*
+		 * First try to use the console cflag setting.
+		 */
+		memset(&termios, 0, sizeof(struct ktermios));
+		termios.c_cflag = uport->cons->cflag;
+		/*
+		 * If that's unset, use the tty termios setting.
+		 */
+		if (port->tty && port->tty->termios && termios.c_cflag == 0)
+			termios = *(port->tty->termios);
+
 		uart_change_pm(state, 0);
-		uport->ops->set_termios(uport, &termios, NULL);
+		//uport->ops->set_termios(uport, &termios, NULL);
 		console_start(uport->cons);
 	}
 

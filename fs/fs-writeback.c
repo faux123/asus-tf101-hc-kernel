@@ -398,7 +398,10 @@ writeback_single_inode(struct inode *inode, struct writeback_control *wbc)
 				 * retrying writeback of the dirty page/inode
 				 * that cannot be performed immediately.
 				 */
-				redirty_tail(inode);
+				if(inode_to_bdi(inode) == NULL)
+					printk("%s bdi is NULL\n", __func__);
+				else
+					redirty_tail(inode);
 			}
 		} else if (inode->i_state & I_DIRTY) {
 			/*
@@ -940,7 +943,7 @@ void __mark_inode_dirty(struct inode *inode, int flags)
 	if ((inode->i_state & flags) == flags)
 		return;
 
-	if (unlikely(block_dump))
+	if (unlikely(block_dump > 1))
 		block_dump___mark_inode_dirty(inode);
 
 	spin_lock(&inode_lock);
@@ -974,6 +977,12 @@ void __mark_inode_dirty(struct inode *inode, int flags)
 		 */
 		if (!was_dirty) {
 			bdi = inode_to_bdi(inode);
+
+			if(bdi == NULL)
+			{
+				printk(KERN_INFO"bdi NULL\n");
+				goto out;
+			}
 
 			if (bdi_cap_writeback_dirty(bdi)) {
 				WARN(!test_bit(BDI_registered, &bdi->state),

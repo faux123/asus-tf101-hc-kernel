@@ -24,5 +24,9 @@ obj-$(CONFIG_INPUT_TOUCHSCREEN)	+= touchscreen/
 obj-$(CONFIG_INPUT_MISC)	+= misc/
 
 obj-$(CONFIG_INPUT_APMPOWER)	+= apm-power.o
+obj-$(CONFIG_INPUT_KEYRESET)	+= keyreset.o
 
 obj-$(CONFIG_XEN_KBDDEV_FRONTEND)	+= xen-kbdfront.o
+obj-$(CONFIG_SENSORS_PROX_LDS6202)           += prox_lds6202/
+obj-$(CONFIG_SENSORS_CAP_LDS6126)           += cap_lds6126/
+obj-$(CONFIG_DSP_FM34)		+= dsp/
